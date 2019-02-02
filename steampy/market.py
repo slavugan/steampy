@@ -5,8 +5,13 @@ from requests import Session
 from steampy.confirmation import ConfirmationExecutor
 from steampy.exceptions import ApiException, TooManyRequests, LoginRequired
 from steampy.models import Currency, SteamUrl, GameOptions
-from steampy.utils import text_between, get_listing_id_to_assets_address_from_html, get_market_listings_from_html, \
-    merge_items_with_descriptions_from_listing, get_market_sell_listings_from_api
+from steampy.utils import (
+    get_listing_id_to_assets_address_from_html,
+    get_market_listings_from_html,
+    get_market_sell_listings_from_api,
+    merge_items_with_descriptions_from_listing,
+    text_between,
+)
 
 
 def login_required(func):
@@ -27,30 +32,43 @@ class SteamMarket:
         self.steam_id = None
         self.was_login_executed = False
 
-    def _set_login_executed(self, steam_id: str, session_id: str, identity_secret: str):
+    def _set_login_executed(self,
+                            steam_id: str,
+                            session_id: str,
+                            identity_secret: str):
         self.steam_id = steam_id
         self._session_id = session_id
         self._identity_secret = identity_secret
         self.was_login_executed = True
 
-    def fetch_price(self, item_hash_name: str, game: GameOptions, currency: str = Currency.USD) -> dict:
+    def fetch_price(self,
+                    item_hash_name: str,
+                    game: GameOptions,
+                    currency: str = Currency.USD) -> dict:
         url = SteamUrl.COMMUNITY_URL + '/market/priceoverview/'
-        params = {'country': 'PL',
-                  'currency': currency,
-                  'appid': game.app_id,
-                  'market_hash_name': item_hash_name}
+        params = {
+            'country': 'PL',
+            'currency': currency,
+            'appid': game.app_id,
+            'market_hash_name': item_hash_name
+        }
         response = self._session.get(url, params=params)
         if response.status_code == 429:
             raise TooManyRequests("You can fetch maximum 20 prices in 60s period")
         return response.json()
 
     @login_required
-    def fetch_price_history(self, item_hash_name: str, game: GameOptions, currency: str = Currency.USD) -> dict:
+    def fetch_price_history(self,
+                            item_hash_name: str,
+                            game: GameOptions,
+                            currency: str = Currency.USD) -> dict:
         url = SteamUrl.COMMUNITY_URL + '/market/pricehistory/'
-        params = {'country': 'PL',
-                  'currency': currency,
-                  'appid': game.app_id,
-                  'market_hash_name': item_hash_name}
+        params = {
+            'country': 'PL',
+            'currency': currency,
+            'appid': game.app_id,
+            'market_hash_name': item_hash_name
+        }
         response = self._session.get(url, params=params)
         if response.status_code == 429:
             raise TooManyRequests("You can fetch maximum 20 prices in 60s period")
