@@ -1,70 +1,91 @@
 import base64
 import time
+
+import aiohttp
 import requests
-from steampy import guard
 import rsa
+from yarl import URL
+
+from steampy import guard
 from steampy.models import SteamUrl
 from steampy.exceptions import InvalidCredentials, CaptchaRequired
 
 
 class LoginExecutor:
-
-    def __init__(self, username: str, password: str, shared_secret: str, session: requests.Session) -> None:
+    def __init__(
+        self,
+        username: str,
+        password: str,
+        shared_secret: str,
+        session: aiohttp.ClientSession
+    ) -> None:
         self.username = username
         self.password = password
         self.one_time_code = ''
         self.shared_secret = shared_secret
         self.session = session
 
-    def login(self) -> requests.Session:
-        login_response = self._send_login_request()
-        self._check_for_captcha(login_response)
-        login_response = self._enter_steam_guard_if_necessary(login_response)
-        self._assert_valid_credentials(login_response)
-        self._perform_redirects(login_response.json())
+    async def login(self) -> aiohttp.ClientSession:
+        login_response = await self._send_login_request()
+
+        if login_response.get('captcha_needed'):
+            raise CaptchaRequired('Captcha required')
+        if login_response.get('requires_twofactor'):
+            login_response = await self._enter_steam_guard()
+        if not login_response['success']:
+            raise InvalidCredentials(login_response['message'])
+
+        await self._perform_redirects(login_response)
         self.set_sessionid_cookies()
         return self.session
 
-    def _send_login_request(self) -> requests.Response:
-        rsa_params = self._fetch_rsa_params()
+    async def _send_login_request(self) -> dict:
+        rsa_params = await self._fetch_rsa_params()
         encrypted_password = self._encrypt_password(rsa_params)
         rsa_timestamp = rsa_params['rsa_timestamp']
-        request_data = self._prepare_login_request_data(encrypted_password, rsa_timestamp)
-        return self.session.post(SteamUrl.STORE_URL + '/login/dologin', data=request_data)
+        request_data = self._prepare_login_request_data(
+            encrypted_password, rsa_timestamp
+        )
+        response = await self.session.post(
+            SteamUrl.STORE_URL + '/login/dologin',
+            data=request_data
+        )
+        return await response.json()
 
     def set_sessionid_cookies(self):
-        sessionid = self.session.cookies.get_dict()['sessionid']
-        community_domain = SteamUrl.COMMUNITY_URL[8:]
-        store_domain = SteamUrl.STORE_URL[8:]
-        community_cookie = self._create_session_id_cookie(sessionid, community_domain)
-        store_cookie = self._create_session_id_cookie(sessionid, store_domain)
-        self.session.cookies.set(**community_cookie)
-        self.session.cookies.set(**store_cookie)
+        sessionid = self.session.cookie_jar.filter_cookies(
+            URL(SteamUrl.HELP_URL)
+        ).get('sessionid').value
 
-    @staticmethod
-    def _create_session_id_cookie(sessionid: str, domain: str) -> dict:
-        return {"name": "sessionid",
-                "value": sessionid,
-                "domain": domain}
+        self.session.cookie_jar.update_cookies(
+            {'sessionid': sessionid}, URL(SteamUrl.COMMUNITY_URL)
+        )
+        self.session.cookie_jar.update_cookies(
+            {'sessionid': sessionid}, URL(SteamUrl.STORE_URL)
+        )
 
-    def _fetch_rsa_params(self, current_number_of_repetitions: int = 0) -> dict:
+    async def _fetch_rsa_params(self, current_number_of_repetitions: int = 0) -> dict:
         maximal_number_of_repetitions = 5
-        key_response = self.session.post(SteamUrl.STORE_URL + '/login/getrsakey/',
-                                         data={'username': self.username}).json()
+        response = await self.session.post(
+            SteamUrl.STORE_URL + '/login/getrsakey/',
+            data={'username': self.username}
+        )
+        response = await response.json()
         try:
-            rsa_mod = int(key_response['publickey_mod'], 16)
-            rsa_exp = int(key_response['publickey_exp'], 16)
-            rsa_timestamp = key_response['timestamp']
+            rsa_mod = int(response['publickey_mod'], 16)
+            rsa_exp = int(response['publickey_exp'], 16)
             return {'rsa_key': rsa.PublicKey(rsa_mod, rsa_exp),
-                    'rsa_timestamp': rsa_timestamp}
+                    'rsa_timestamp': response['timestamp']}
         except KeyError:
             if current_number_of_repetitions < maximal_number_of_repetitions:
-                return self._fetch_rsa_params(current_number_of_repetitions + 1)
+                return await self._fetch_rsa_params(current_number_of_repetitions + 1)
             else:
                 raise ValueError('Could not obtain rsa-key')
 
     def _encrypt_password(self, rsa_params: dict) -> str:
-        return base64.b64encode(rsa.encrypt(self.password.encode('utf-8'), rsa_params['rsa_key']))
+        return base64.b64encode(
+            rsa.encrypt(self.password.encode('utf-8'), rsa_params['rsa_key'])
+        ).decode('utf-8')
 
     def _prepare_login_request_data(self, encrypted_password: str, rsa_timestamp: str) -> dict:
         return {
@@ -81,28 +102,17 @@ class LoginExecutor:
             'donotcache': str(int(time.time() * 1000))
         }
 
-    @staticmethod
-    def _check_for_captcha(login_response: requests.Response) -> None:
-        if login_response.json().get('captcha_needed', False):
-            raise CaptchaRequired('Captcha required')
+    async def _enter_steam_guard(self) -> dict:
+        self.one_time_code = guard.generate_one_time_code(self.shared_secret)
+        return await self._send_login_request()
 
-    def _enter_steam_guard_if_necessary(self, login_response: requests.Response) -> requests.Response:
-        if login_response.json()['requires_twofactor']:
-            self.one_time_code = guard.generate_one_time_code(self.shared_secret)
-            return self._send_login_request()
-        return login_response
-
-    @staticmethod
-    def _assert_valid_credentials(login_response: requests.Response) -> None:
-        if not login_response.json()['success']:
-            raise InvalidCredentials(login_response.json()['message'])
-
-    def _perform_redirects(self, response_dict: dict) -> None:
-        parameters = response_dict.get('transfer_parameters')
+    async def _perform_redirects(self, login_response: dict) -> None:
+        parameters = login_response.get('transfer_parameters')
         if parameters is None:
             raise Exception('Cannot perform redirects after login, no parameters fetched')
-        for url in response_dict['transfer_urls']:
-            self.session.post(url, parameters)
+        for url in login_response['transfer_urls']:
+            async with self.session.post(url, data=parameters):
+                pass
 
     def _fetch_home_page(self, session: requests.Session) -> requests.Response:
         return session.post(SteamUrl.COMMUNITY_URL + '/my/home/')

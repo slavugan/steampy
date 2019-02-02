@@ -1,9 +1,12 @@
-import bs4
+import json
 import urllib.parse as urlparse
 from typing import List, Union
 
-import json
+import aiohttp
+import bs4
 import requests
+from yarl import URL
+
 from steampy import guard
 from steampy.chat import SteamChat
 from steampy.confirmation import ConfirmationExecutor
@@ -27,21 +30,38 @@ def login_required(func):
 
 
 class SteamClient:
-    def __init__(self, api_key: str, username: str = None, password: str = None, steam_guard:str = None) -> None:
+    def __init__(self,
+        username: str = None,
+        password: str = None,
+        api_key: str = None,
+        shared_secret: str = None,
+        identity_secret: str = None,
+        steam_id: str = None,
+    ) -> None:
         self._api_key = api_key
-        self._session = requests.Session()
-        self.steam_guard = steam_guard
+        self._session = aiohttp.ClientSession()
+        self.steam_guard = {
+            'shared_secret': shared_secret,
+            'identity_secret': identity_secret,
+            'steamid': steam_id,
+        }
         self.was_login_executed = False
         self.username = username
         self._password = password
+        self._shared_secret = shared_secret
+        self._identity_secret = identity_secret
+        self.steam_id = steam_id
         self.market = SteamMarket(self._session)
         self.chat = SteamChat(self._session)
 
-    def login(self, username: str, password: str, steam_guard: str) -> None:
-        self.steam_guard = guard.load_steam_guard(steam_guard)
-        self.username = username
-        self._password = password
-        LoginExecutor(username, password, self.steam_guard['shared_secret'], self._session).login()
+    async def login(
+        self, username: str = None, password: str = None, steam_guard: str = None
+    ) -> None:
+        # self.steam_guard = guard.load_steam_guard(steam_guard)
+        # self.username = username
+        # self._password = password
+        login_executor = LoginExecutor(self.username, self._password, self._shared_secret, self._session)
+        await login_executor.login()
         self.was_login_executed = True
         self.market._set_login_executed(self.steam_guard, self._get_session_id())
 
@@ -104,7 +124,9 @@ class SteamClient:
         return response_dict
 
     def _get_session_id(self) -> str:
-        return self._session.cookies.get_dict()['sessionid']
+        return self._session.cookie_jar.filter_cookies(
+            URL(SteamUrl.HELP_URL)
+        ).get('sessionid').value
 
     def get_trade_offers_summary(self) -> dict:
         params = {'key': self._api_key}

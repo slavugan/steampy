@@ -22,13 +22,15 @@ def login_required(func):
 class SteamMarket:
     def __init__(self, session: Session):
         self._session = session
-        self._steam_guard = None
         self._session_id = None
+        self._identity_secret = None
+        self.steam_id = None
         self.was_login_executed = False
 
-    def _set_login_executed(self, steamguard: dict, session_id: str):
-        self._steam_guard = steamguard
+    def _set_login_executed(self, steam_id: str, session_id: str, identity_secret: str):
+        self.steam_id = steam_id
         self._session_id = session_id
+        self._identity_secret = identity_secret
         self.was_login_executed = True
 
     def fetch_price(self, item_hash_name: str, game: GameOptions, currency: str = Currency.USD) -> dict:
@@ -93,7 +95,10 @@ class SteamMarket:
         return listings
 
     @login_required
-    def create_sell_order(self, assetid: str, game: GameOptions, money_to_receive: str) -> dict:
+    def create_sell_order(self,
+                          assetid: str,
+                          game: GameOptions,
+                          money_to_receive: str) -> dict:
         data = {
             "assetid": assetid,
             "sessionid": self._session_id,
@@ -102,14 +107,23 @@ class SteamMarket:
             "amount": 1,
             "price": money_to_receive
         }
-        headers = {'Referer': "%s/profiles/%s/inventory" % (SteamUrl.COMMUNITY_URL, self._steam_guard['steamid'])}
-        response = self._session.post(SteamUrl.COMMUNITY_URL + "/market/sellitem/", data, headers=headers).json()
+        headers = {
+            'Referer': "%s/profiles/%s/inventory" % (SteamUrl.COMMUNITY_URL,
+                                                     self.steam_id)
+        }
+        response = self._session.post(
+            SteamUrl.COMMUNITY_URL + "/market/sellitem/", data, headers=headers
+        ).json()
         if response.get("needs_mobile_confirmation"):
             return self._confirm_sell_listing(assetid)
         return response
 
     @login_required
-    def create_buy_order(self, market_name: str, price_single_item: str, quantity: int, game: GameOptions,
+    def create_buy_order(self,
+                         market_name: str,
+                         price_single_item: str,
+                         quantity: int,
+                         game: GameOptions,
                          currency: Currency = Currency.USD) -> dict:
         data = {
             "sessionid": self._session_id,
@@ -119,12 +133,21 @@ class SteamMarket:
             "price_total": str(Decimal(price_single_item) * Decimal(quantity)),
             "quantity": quantity
         }
-        headers = {'Referer': "%s/market/listings/%s/%s" % (SteamUrl.COMMUNITY_URL, game.app_id, market_name)}
-        response = self._session.post(SteamUrl.COMMUNITY_URL + "/market/createbuyorder/", data,
-                                      headers=headers).json()
+        headers = {
+            'Referer': "%s/market/listings/%s/%s" % (SteamUrl.COMMUNITY_URL,
+                                                     game.app_id,
+                                                     market_name)
+        }
+        response = self._session.post(
+            SteamUrl.COMMUNITY_URL + "/market/createbuyorder/",
+            data, headers=headers
+        ).json()
         if response.get("success") != 1:
-            raise ApiException("There was a problem creating the order. Are you using the right currency? success: %s"
-                               % response.get("success"))
+            raise ApiException(
+                """There was a problem creating the order.
+                   Are you using the right currency? success: %s""" %
+                response.get("success")
+            )
         return response
 
     @login_required
@@ -134,7 +157,10 @@ class SteamMarket:
         url = "%s/market/removelisting/%s" % (SteamUrl.COMMUNITY_URL, sell_listing_id)
         response = self._session.post(url, data=data, headers=headers)
         if response.status_code != 200:
-            raise ApiException("There was a problem removing the listing. http code: %s" % response.status_code)
+            raise ApiException(
+                "There was a problem removing the listing. http code: %s" %
+                response.status_code
+            )
 
     @login_required
     def cancel_buy_order(self, buy_order_id) -> dict:
@@ -143,12 +169,13 @@ class SteamMarket:
             "buy_orderid": buy_order_id
         }
         headers = {"Referer": SteamUrl.COMMUNITY_URL + "/market"}
-        response = self._session.post(SteamUrl.COMMUNITY_URL + "/market/cancelbuyorder/", data, headers=headers).json()
+        response = self._session.post(
+            SteamUrl.COMMUNITY_URL + "/market/cancelbuyorder/", data, headers=headers
+        ).json()
         if response.get("success") != 1:
             raise ApiException("There was a problem canceling the order. success: %s" % response.get("success"))
         return response
 
     def _confirm_sell_listing(self, asset_id: str) -> dict:
-        con_executor = ConfirmationExecutor(self._steam_guard['identity_secret'], self._steam_guard['steamid'],
-                                            self._session)
+        con_executor = ConfirmationExecutor(self._identity_secret, self.steam_id, self._session)
         return con_executor.confirm_sell_listing(asset_id)
