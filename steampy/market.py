@@ -182,18 +182,20 @@ class SteamMarket:
 
     @login_required
     def cancel_buy_order(self, buy_order_id) -> dict:
-        data = {
-            "sessionid": self._session_id,
-            "buy_orderid": buy_order_id
-        }
+        data = {"sessionid": self._session_id, "buy_orderid": buy_order_id}
         headers = {"Referer": SteamUrl.COMMUNITY_URL + "/market"}
         response = self._session.post(
-            SteamUrl.COMMUNITY_URL + "/market/cancelbuyorder/", data, headers=headers
+            SteamUrl.COMMUNITY_URL + "/market/cancelbuyorder/",
+            data, headers=headers
         ).json()
         if response.get("success") != 1:
-            raise ApiException("There was a problem canceling the order. success: %s" % response.get("success"))
+            raise ApiException(
+                "There was a problem canceling the order. success: %s" %
+                response.get("success")
+            )
         return response
 
     def _confirm_sell_listing(self, asset_id: str) -> dict:
-        con_executor = ConfirmationExecutor(self._identity_secret, self.steam_id, self._session)
+        con_executor = ConfirmationExecutor(self._identity_secret,
+                                            self.steam_id, self._session)
         return con_executor.confirm_sell_listing(asset_id)

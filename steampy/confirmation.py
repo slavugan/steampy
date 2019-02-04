@@ -82,14 +82,17 @@ class ConfirmationExecutor:
 
     def _create_confirmation_params(self, tag_string: str) -> dict:
         timestamp = int(time.time())
-        confirmation_key = guard.generate_confirmation_key(self._identity_secret, tag_string, timestamp)
+        confirmation_key = guard.generate_confirmation_key(self._identity_secret,
+                                                           tag_string, timestamp)
         android_id = guard.generate_device_id(self._my_steam_id)
-        return {'p': android_id,
-                'a': self._my_steam_id,
-                'k': confirmation_key,
-                't': timestamp,
-                'm': 'android',
-                'tag': tag_string}
+        return {
+            'p': android_id,
+            'a': self._my_steam_id,
+            'k': confirmation_key,
+            't': timestamp,
+            'm': 'android',
+            'tag': tag_string
+        }
 
     def _select_trade_offer_confirmation(self, confirmations: List[Confirmation], trade_offer_id: str) -> Confirmation:
         for confirmation in confirmations:

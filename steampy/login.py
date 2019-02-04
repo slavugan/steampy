@@ -2,9 +2,9 @@ import base64
 import time
 
 import aiohttp
-import requests
 import rsa
 from yarl import URL
+from pathlib import Path
 
 from steampy import guard
 from steampy.models import SteamUrl
@@ -12,17 +12,12 @@ from steampy.exceptions import InvalidCredentials, CaptchaRequired
 
 
 class LoginExecutor:
-    def __init__(
-        self,
-        username: str,
-        password: str,
-        shared_secret: str,
-        session: aiohttp.ClientSession
-    ) -> None:
+    def __init__(self, username: str, password: str, shared_secret: str,
+                 session: aiohttp.ClientSession):
         self.username = username
         self.password = password
-        self.one_time_code = ''
         self.shared_secret = shared_secret
+        self.one_time_code = ''
         self.session = session
 
     async def login(self) -> aiohttp.ClientSession:
@@ -113,6 +108,3 @@ class LoginExecutor:
         for url in login_response['transfer_urls']:
             async with self.session.post(url, data=parameters):
                 pass
-
-    def _fetch_home_page(self, session: requests.Session) -> requests.Response:
-        return session.post(SteamUrl.COMMUNITY_URL + '/my/home/')

@@ -1,6 +1,7 @@
 import json
 import urllib.parse as urlparse
-from typing import List, Union
+from typing import List, Union, Optional
+from pathlib import Path
 
 import aiohttp
 import bs4
@@ -44,26 +45,67 @@ class SteamClient:
                  api_key: str = None,
                  shared_secret: str = None,
                  identity_secret: str = None,
-                 steam_id: str = None,) -> None:
+                 steam_id: str = None,
+                 reuse_session: bool = False,
+                 session_file: Path = None,
+                 sessions_dir: Path = None,
+                ) -> None:
         self._api_key = api_key
         self._identity_secret = identity_secret
         self._password = password
-        self._session = aiohttp.ClientSession()
         self._shared_secret = shared_secret
+        self._session = aiohttp.ClientSession()
         self.username = username
         self.steam_id = steam_id
         self.was_login_executed = False
         self.market = SteamMarket(self._session)
         self.chat = SteamChat(self._session)
+        self.reuse_session = reuse_session
+        self.session_file = session_file
+        self.sessions_dir = sessions_dir
 
     async def login(self) -> None:
-        login_executor = LoginExecutor(self.username, self._password,
-                                       self._shared_secret, self._session)
-        await login_executor.login()
+        session_loaded = False
+        if self.reuse_session:
+            session_loaded = await self.load_session()
+            if session_loaded:
+                print('session loaded')
+            elif session_loaded == False:
+                print('session is not alive any more')
+        if not session_loaded:
+            print('do classic login')
+            login_executor = LoginExecutor(username=self.username,
+                                           password=self._password,
+                                           shared_secret=self._shared_secret,
+                                           session=self._session)
+            await login_executor.login()
         self.was_login_executed = True
         self.market._set_login_executed(steam_id=self.steam_id,
                                         session_id=self._get_session_id(),
                                         identity_secret=self._identity_secret)
+        if self.reuse_session:
+            self.save_session()
+
+    def save_session(self) -> None:
+        self._session.cookie_jar.save(self.session_file)
+
+    async def load_session(self) -> Optional[bool]:
+        self.set_session_file()
+        if self.session_file.exists():
+            print('loading session from file: %s' % self.session_file)
+            self._session.cookie_jar.load(self.session_file)
+            return await self.is_session_alive()
+        print('there is no file to load the sesssion')
+
+    async def close_session(self) -> None:
+        """Saves session if needed.
+        Closes underlying connector. Releases all acquired resources.
+        Call it at the end of your program or when you don't want to use
+        this client amy more
+        """
+        if self.reuse_session:
+            self.save_session()
+        await self._session.close()
 
     @login_required
     async def logout(self) -> None:
@@ -73,7 +115,6 @@ class SteamClient:
             raise Exception("Logout unsuccessful")
         self.was_login_executed = False
 
-    @login_required
     async def is_session_alive(self):
         response = await self._session.get(SteamUrl.COMMUNITY_URL)
         response = await response.text()
@@ -359,3 +400,18 @@ class SteamClient:
             return price_to_float(balance)
         else:
             return balance
+
+    def set_session_file(self) -> None:
+        if self.session_file:
+            if self.session_file.is_dir():
+                raise ValueError('session_file should not point to directory')
+        elif self.sessions_dir:
+            if self.sessions_dir.is_file():
+                raise ValueError('sessions_dir should not point to a file')
+            if not self.steam_id:
+                raise Exception(
+                    "steam_id is required to save or load sessions from a directory"
+                )
+            self.session_file = self.sessions_dir / self.steam_id
+        else:
+            raise Exception('No session_file or sessions_dir was provided')
