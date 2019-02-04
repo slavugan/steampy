@@ -57,9 +57,8 @@ class SteamClient:
         self.chat = SteamChat(self._session)
 
     async def login(self) -> None:
-        login_executor = LoginExecutor(
-            self.username, self._password, self._shared_secret, self._session
-        )
+        login_executor = LoginExecutor(self.username, self._password,
+                                       self._shared_secret, self._session)
         await login_executor.login()
         self.was_login_executed = True
         self.market._set_login_executed(steam_id=self.steam_id,
@@ -68,10 +67,8 @@ class SteamClient:
 
     @login_required
     async def logout(self) -> None:
-        await self._session.post(
-            SteamUrl.STORE_URL + '/logout/',
-            data={'sessionid': self._get_session_id()}
-        )
+        await self._session.post(SteamUrl.STORE_URL + '/logout/',
+                                 data={'sessionid': self._get_session_id()})
         if await self.is_session_alive():
             raise Exception("Logout unsuccessful")
         self.was_login_executed = False
@@ -99,7 +96,8 @@ class SteamClient:
 
     @staticmethod
     def is_invalid_api_key(response: requests.Response) -> bool:
-        msg = 'Access is denied. Retrying will not help. Please verify your <pre>key=</pre> parameter'
+        msg = """Access is denied. Retrying will not help.
+                 Please verify your <pre>key=</pre> parameter"""
         return msg in response.text
 
     @login_required
@@ -107,8 +105,7 @@ class SteamClient:
                          game: GameOptions,
                          merge: bool = True,
                          count: int = 5000) -> dict:
-        steam_id = self.steam_id
-        return self.get_partner_inventory(steam_id, game, merge, count)
+        return self.get_partner_inventory(self.steam_id, game, merge, count)
 
     @login_required
     def get_partner_inventory(self,
@@ -116,18 +113,16 @@ class SteamClient:
                               game: GameOptions,
                               merge: bool = True,
                               count: int = 5000) -> dict:
-        url = '/'.join([
-            SteamUrl.COMMUNITY_URL, 'inventory',
-            partner_steam_id, game.app_id, game.context_id
-        ])
+        url = '/'.join([SteamUrl.COMMUNITY_URL, 'inventory',
+                        partner_steam_id, game.app_id, game.context_id])
         params = {'l': 'english', 'count': count}
         response_dict = self._session.get(url, params=params).json()
+
         if response_dict['success'] != 1:
             raise ApiException('Success value should be 1.')
         if merge:
-            return merge_items_with_descriptions_from_inventory(
-                response_dict, game
-            )
+            return merge_items_with_descriptions_from_inventory(response_dict,
+                                                                game)
         return response_dict
 
     def _get_session_id(self) -> str:
@@ -137,9 +132,8 @@ class SteamClient:
 
     def get_trade_offers_summary(self) -> dict:
         params = {'key': self._api_key}
-        return self.api_call(
-            'GET', 'IEconService', 'GetTradeOffersSummary', 'v1', params
-        ).json()
+        return self.api_call('GET', 'IEconService',
+                             'GetTradeOffersSummary', 'v1', params).json()
 
     def get_trade_offers(self, merge: bool = True) -> dict:
         params = {
@@ -152,9 +146,8 @@ class SteamClient:
             'historical_only': 0,
             'time_historical_cutoff': ''
         }
-        response = self.api_call(
-            'GET', 'IEconService', 'GetTradeOffers', 'v1', params
-        ).json()
+        response = self.api_call('GET', 'IEconService',
+                                 'GetTradeOffers', 'v1', params).json()
         response = self._filter_non_active_offers(response)
         if merge:
             response = merge_items_with_descriptions_from_offers(response)
@@ -199,12 +192,15 @@ class SteamClient:
             'include_failed': include_failed,
             'include_total': include_total
         }
-        response = self.api_call('GET', 'IEconService', 'GetTradeHistory', 'v1', params).json()
+        response = self.api_call('GET', 'IEconService',
+                                 'GetTradeHistory', 'v1', params).json()
         return response
 
     @login_required
     def get_trade_receipt(self, trade_id: str) -> list:
-        html = self._session.get("https://steamcommunity.com/trade/{}/receipt".format(trade_id)).content.decode()
+        html = self._session.get(
+            "https://steamcommunity.com/trade/{}/receipt".format(trade_id)
+        ).content.decode()
         items = []
         for item in texts_between(html, "oItem = ", ";\r\n\toItem"):
             items.append(json.loads(item))
@@ -220,11 +216,13 @@ class SteamClient:
         partner = self._fetch_trade_partner_id(trade_offer_id)
         session_id = self._get_session_id()
         accept_url = SteamUrl.COMMUNITY_URL + '/tradeoffer/' + trade_offer_id + '/accept'
-        params = {'sessionid': session_id,
-                  'tradeofferid': trade_offer_id,
-                  'serverid': '1',
-                  'partner': partner,
-                  'captcha': ''}
+        params = {
+            'sessionid': session_id,
+            'tradeofferid': trade_offer_id,
+            'serverid': '1',
+            'partner': partner,
+            'captcha': ''
+        }
         headers = {'Referer': self._get_trade_offer_url(trade_offer_id)}
         response = self._session.post(accept_url, data=params, headers=headers).json()
         if response.get('needs_mobile_confirmation', False):
