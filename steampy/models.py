@@ -1,5 +1,6 @@
 import enum
 from collections import namedtuple
+from yarl import URL
 
 
 class GameOptions:
@@ -54,6 +55,7 @@ class TradeOfferState(enum.IntEnum):
 
 class SteamUrl:
     API_URL = "https://api.steampowered.com"
+    API = URL(API_URL)
     COMMUNITY_URL = "https://steamcommunity.com"
     STORE_URL = 'https://store.steampowered.com'
     HELP_URL = 'https://help.steampowered.com'

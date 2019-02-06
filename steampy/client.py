@@ -1,6 +1,6 @@
 import json
 import urllib.parse as urlparse
-from typing import List, Union, Optional
+from typing import List, Union, Optional, Tuple, Any
 from pathlib import Path
 
 import aiohttp
@@ -11,7 +11,9 @@ from yarl import URL
 from steampy import guard
 from steampy.chat import SteamChat
 from steampy.confirmation import ConfirmationExecutor
-from steampy.exceptions import SevenDaysHoldException, LoginRequired, ApiException
+from steampy.exceptions import (
+    ApiException, InvalidSessionPath, LoginRequired, SevenDaysHoldException
+)
 from steampy.login import LoginExecutor, InvalidCredentials
 from steampy.market import SteamMarket
 from steampy.models import Asset, TradeOfferState, SteamUrl, GameOptions
@@ -55,6 +57,7 @@ class SteamClient:
         self._password = password
         self._shared_secret = shared_secret
         self._session = aiohttp.ClientSession()
+        self._api_session = aiohttp.ClientSession()
         self.username = username
         self.steam_id = steam_id
         self.was_login_executed = False
@@ -87,10 +90,16 @@ class SteamClient:
             self.save_session()
 
     def save_session(self) -> None:
-        self._session.cookie_jar.save(self.session_file)
+        if self.session_file and self.session_file.is_file():
+            self._session.cookie_jar.save(self.session_file)
 
     async def load_session(self) -> Optional[bool]:
-        self.set_session_file()
+        try:
+            self.set_session_file()
+        except InvalidSessionPath as err:
+            self.reuse_session = False
+            raise err
+
         if self.session_file.exists():
             print('loading session from file: %s' % self.session_file)
             self._session.cookie_jar.load(self.session_file)
@@ -106,6 +115,7 @@ class SteamClient:
         if self.reuse_session:
             self.save_session()
         await self._session.close()
+        await self._api_session.close()
 
     @login_required
     async def logout(self) -> None:
@@ -120,26 +130,29 @@ class SteamClient:
         response = await response.text()
         return '>%s<' % self.username.lower() in response.lower()
 
-    def api_call(self,
-                 request_method: str,
-                 interface: str,
-                 api_method: str,
-                 version: str,
-                 params: dict = None) -> requests.Response:
-        url = '/'.join([SteamUrl.API_URL, interface, api_method, version])
-        if request_method == 'GET':
-            response = requests.get(url, params=params)
+    async def api_call(self,
+                       url: URL,
+                       params: dict = None,
+                       post: bool = False) -> dict:
+        if post:
+            response = await self._api_session.post(url, data=params)
         else:
-            response = requests.post(url, data=params)
-        if self.is_invalid_api_key(response):
+            response = await self._api_session.get(url, params=params)
+
+        if response.status == 200:
+            return await response.json()
+
+        response_text = await response.text()
+        if response.status == 403 and self._is_invalid_api_key(response_text):
             raise InvalidCredentials('Invalid API key')
-        return response
+        else:
+            raise Exception(response_text)
 
     @staticmethod
-    def is_invalid_api_key(response: requests.Response) -> bool:
+    def _is_invalid_api_key(response: str) -> bool:
         msg = """Access is denied. Retrying will not help.
                  Please verify your <pre>key=</pre> parameter"""
-        return msg in response.text
+        return msg in response
 
     @login_required
     def get_my_inventory(self,
@@ -317,11 +330,15 @@ class SteamClient:
             response.update(self._confirm_transaction(response['tradeofferid']))
         return response
 
-    def get_profile(self, steam_id: str) -> dict:
-        params = {'steamids': steam_id, 'key': self._api_key}
-        response = self.api_call('GET', 'ISteamUser', 'GetPlayerSummaries', 'v0002', params)
-        data = response.json()
-        return data['response']['players'][0]
+    async def get_profile(self, steam_id: str) -> dict:
+        """
+        https://developer.valvesoftware.com/wiki/Steam_Web_API#GetPlayerSummaries_.28v0002.29
+        """
+        response = await self.api_call(
+            SteamUrl.API / 'ISteamUser/GetPlayerSummaries/v0002',
+            {'steamids': steam_id, 'key': self._api_key}
+        )
+        return response['response']['players'][0]
 
     def get_friend_list(self, steam_id: str, relationship_filter: str="all") -> dict:
         params = {
@@ -402,16 +419,21 @@ class SteamClient:
             return balance
 
     def set_session_file(self) -> None:
-        if self.session_file:
-            if self.session_file.is_dir():
-                raise ValueError('session_file should not point to directory')
-        elif self.sessions_dir:
-            if self.sessions_dir.is_file():
-                raise ValueError('sessions_dir should not point to a file')
-            if not self.steam_id:
-                raise Exception(
-                    "steam_id is required to save or load sessions from a directory"
-                )
-            self.session_file = self.sessions_dir / self.steam_id
-        else:
-            raise Exception('No session_file or sessions_dir was provided')
+        try:
+            if self.session_file:
+                if self.session_file.is_dir():
+                    raise InvalidSessionPath('session_file should not point to a directory')
+            elif self.sessions_dir:
+                if self.sessions_dir.is_file():
+                    raise InvalidSessionPath('sessions_dir should not point to a file')
+                if not self.steam_id:
+                    raise InvalidSessionPath(
+                        "steam_id is required to save or load sessions from a directory"
+                    )
+                self.session_file = self.sessions_dir / self.steam_id
+            else:
+                raise Exception('No session_file or sessions_dir was provided')
+        except InvalidSessionPath as err:
+            # prevent saving session to invalid file
+            self.reuse_session = False
+            raise err
